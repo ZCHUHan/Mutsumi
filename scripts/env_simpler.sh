@@ -35,7 +35,6 @@ source $HOME/miniconda3/etc/profile.d/conda.sh
 conda activate simpler_env
 
 cd "$dir_path/../SimplerEnv"
-sudo apt-get install -y libvulkan1 cudnn9-cuda-12 libx11-6
 pip install --upgrade pip
 pip install numpy==1.24.4
 pip install -r requirements_full_install.txt --use-deprecated=legacy-resolver
