@@ -32,6 +32,17 @@ from llava.model import LlavaLlamaForCausalLM
 REGISTERED_BASE_MODELS = {}
 
 
+def _safe_module_to(module: torch.nn.Module, *args, **kwargs):
+    try:
+        return module.to(*args, **kwargs)
+    except Exception as exc:
+        msg = str(exc)
+        if "bitsandbytes" in msg and ("4-bit" in msg or "8-bit" in msg):
+            print(f"[verifier][warning] Skipping .to() for bitsandbytes module: {exc}")
+            return module
+        raise
+
+
 def find_all_linear_names(
     args: Namespace,
     model: torch.nn.Module,
@@ -199,21 +210,21 @@ def get_accelerate_model(
         vision_tower = model.get_vision_tower()
         if not vision_tower.is_loaded:
             vision_tower.load_model()
-        vision_tower.to(device="cuda", dtype=torch.bfloat16)
+        vision_tower = _safe_module_to(vision_tower, device="cuda", dtype=torch.bfloat16)
         vision_tower.requires_grad_(False)
 
         mm_projector = model.get_model().mm_projector
-        mm_projector.to(device="cuda", dtype=torch.bfloat16)
+        mm_projector = _safe_module_to(mm_projector, device="cuda", dtype=torch.bfloat16)
         mm_projector.requires_grad_(False)
 
     for name, module in model.named_modules():
         if isinstance(module, LoraLayer):
             if args.bf16:
-                module = module.to(torch.bfloat16)
+                module = _safe_module_to(module, torch.bfloat16)
         if "lm_head" in name or "embed_tokens" in name:
             if hasattr(module, "weight"):
                 if args.bf16 and module.weight.dtype == torch.float32:
-                    module = module.to(torch.bfloat16)
+                    module = _safe_module_to(module, torch.bfloat16)
     return model
 
 

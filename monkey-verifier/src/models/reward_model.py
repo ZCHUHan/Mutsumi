@@ -166,7 +166,16 @@ class RewardModel(transformers.PreTrainedModel):
         reward_head = nn.Linear(hidden_size, 1)
         torch.nn.init.zeros_(reward_head.bias)
         device = next(self.backbone_model.parameters()).device
-        self.reward_head = reward_head.to(device)
+        # self.reward_head = reward_head.to(device)
+        try:
+            self.reward_head = reward_head.to(device)
+        except Exception as exc:
+            msg = str(exc)
+            if ("`.to` is not supported" in msg) and (("4-bit" in msg) or ("8-bit" in msg) or ("bitsandbytes" in msg)):
+                print(f"[verifier][warning] skip reward_head.to(device) for bnb quantized module: {exc}")
+                self.reward_head = reward_head
+            else:
+                raise
 
         if checkpoint_dir is not None:
             reward_head_path = os.path.join(checkpoint_dir, "reward_head")

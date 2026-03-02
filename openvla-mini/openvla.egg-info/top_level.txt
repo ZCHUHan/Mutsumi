@@ -1,0 +1,7 @@
+$XDG_RUNTIME_DIR
+experiments
+prismatic
+rollouts
+scripts
+transfer_images
+vla-scripts

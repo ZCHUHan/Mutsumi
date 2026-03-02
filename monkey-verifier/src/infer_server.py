@@ -8,6 +8,7 @@ from transformers import AutoTokenizer, set_seed
 import uvicorn
 import json_numpy as json
 import torch
+import transformers
 import einops
 
 from reward_model_utils import (
@@ -109,13 +110,47 @@ class RobotRewardModel:
                 for key, value in vars(training_args).items():
                     setattr(args, key, value)
                 
-                model = RewardModel(
-                    args=args,
-                    config=config,
-                    qlora=True,
-                    checkpoint_dir=os.path.join(os.environ.get("MODEL_DIR", "./model_dir"), "lora_adapter"),
-                    tokenizer=tokenizer,
-                ).to(torch.bfloat16)
+                original_to = transformers.modeling_utils.PreTrainedModel.to
+
+                def _patched_to(self, *to_args, **to_kwargs):
+                    try:
+                        return original_to(self, *to_args, **to_kwargs)
+                    except ValueError as exc:
+                        msg = str(exc)
+                        if (
+                            "bitsandbytes" in msg
+                            and ("4-bit" in msg or "8-bit" in msg)
+                        ) or getattr(self, "is_loaded_in_4bit", False) or getattr(
+                            self, "is_loaded_in_8bit", False
+                        ):
+                            print(
+                                "[verifier][warning] Skipping .to() during accelerate dispatch: "
+                                f"{exc}"
+                            )
+                            return self
+                        raise
+
+                transformers.modeling_utils.PreTrainedModel.to = _patched_to
+                try:
+                    model = RewardModel(
+                        args=args,
+                        config=config,
+                        qlora=True,
+                        checkpoint_dir=os.path.join(os.environ.get("MODEL_DIR", "./model_dir"), "lora_adapter"),
+                        tokenizer=tokenizer,
+                    )
+                finally:
+                    transformers.modeling_utils.PreTrainedModel.to = original_to
+                try:
+                    model = model.to(torch.bfloat16)
+                except Exception as exc:
+                    msg = str(exc)
+                    if "bitsandbytes" in msg and ("4-bit" in msg or "8-bit" in msg):
+                        print(f"[verifier][warning] Skipping .to(bfloat16) for bitsandbytes model: {exc}")
+                    elif "already been set to the correct devices" in msg or "casted to the correct dtype" in msg:
+                        print(f"[verifier][warning] Skipping .to(bfloat16) for dispatched model: {exc}")
+                    else:
+                        raise
 
             model.backbone_model.config.use_cache = False  # Disable for deterministic behavior
             print_trainable_parameters(args, model)
@@ -160,9 +195,42 @@ class RobotRewardModel:
         instruction = instruction.lower().rstrip('.')
 
         for action in actions:
-            action_id = np.array(action)
-            if type(action_id[0]) == float:
-                action_id = action_tokenizer(action)
+            action_id = np.asarray(action)
+            if action_id.ndim != 1 or action_id.shape[0] != 7:
+                raise ValueError(f"Expected 7D action, got shape {action_id.shape}.")
+            min_action = float(action_tokenizer.min_action)
+            max_action = float(action_tokenizer.max_action)
+            looks_continuous = (
+                np.issubdtype(action_id.dtype, np.floating)
+                and float(action_id.min()) >= min_action - 1e-4
+                and float(action_id.max()) <= max_action + 1e-4
+            )
+            if looks_continuous:
+                action_token_ids = np.asarray(action_tokenizer(action_id), dtype=np.int64)
+            else:
+                rounded = np.rint(action_id)
+                if not np.allclose(action_id, rounded, atol=1e-3):
+                    raise ValueError(
+                        "Action input is neither continuous action range nor integer-like token ids."
+                    )
+                action_token_ids = rounded.astype(np.int64)
+
+            # Accept both verifier-band ids and OpenVLA ids (which require a -1000 shift).
+            verifier_min = int(action_tokenizer.action_token_begin_idx + 1)
+            verifier_max = int(action_tokenizer.action_token_begin_idx + action_tokenizer.n_bins)
+            if action_token_ids.min() >= verifier_min and action_token_ids.max() <= verifier_max:
+                mapped_action_ids = action_token_ids
+            elif (
+                (action_token_ids - 1000).min() >= verifier_min
+                and (action_token_ids - 1000).max() <= verifier_max
+            ):
+                mapped_action_ids = action_token_ids - 1000
+            else:
+                raise ValueError(
+                    "Action token ids fall outside expected bands. "
+                    f"ids=[{int(action_token_ids.min())}, {int(action_token_ids.max())}], "
+                    f"verifier_band=[{verifier_min}, {verifier_max}]"
+                )
             action_holder = ' '.join(['placeholder'] * 7)  # seven identical tokens
             
             inp = (f"shows the current observation from the robot's wrist-mounted camera. "
@@ -173,7 +241,7 @@ class RobotRewardModel:
                    f"A good robot action should consider different factors, "
                    f"especially interactions with surrounding objects and human preferences.\n"
                    f"ASSISTANT: Based on how humans would control the robot arm and the "
-                   f"awareness of the situation, the quality score of the robot action is")
+                   f"awareness of the situation, the quality score of the robot action is") 
             inp = DEFAULT_IMAGE_TOKEN + '\n' + inp
             conv = conv_template.copy()
             conv.append_message(conv.roles[0], inp)
@@ -194,7 +262,7 @@ class RobotRewardModel:
 
             action_indices = (in_ids == 12983).nonzero()  # Token ID of "placeholder" is 12983
             start_idx = action_indices[0][1].item()
-            in_ids[0, start_idx:start_idx + 7] = torch.tensor(action_id - 1000)
+            in_ids[0, start_idx:start_idx + 7] = torch.tensor(mapped_action_ids, dtype=torch.long)
 
             in_ids = in_ids[:, :-1]
             in_ids = torch.tensor(in_ids, dtype=torch.long).squeeze(0)

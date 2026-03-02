@@ -1,0 +1,151 @@
+Metadata-Version: 2.4
+Name: sglang
+Version: 0.4.9.post3
+Summary: SGLang is yet another fast serving framework for large language models and vision language models.
+Project-URL: Homepage, https://github.com/sgl-project/sglang
+Project-URL: Bug Tracker, https://github.com/sgl-project/sglang/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: Apache Software License
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: aiohttp
+Requires-Dist: requests
+Requires-Dist: tqdm
+Requires-Dist: numpy
+Requires-Dist: IPython
+Requires-Dist: setproctitle
+Provides-Extra: runtime-common
+Requires-Dist: blobfile==3.0.0; extra == "runtime-common"
+Requires-Dist: build; extra == "runtime-common"
+Requires-Dist: compressed-tensors; extra == "runtime-common"
+Requires-Dist: datasets; extra == "runtime-common"
+Requires-Dist: fastapi; extra == "runtime-common"
+Requires-Dist: hf_transfer; extra == "runtime-common"
+Requires-Dist: huggingface_hub; extra == "runtime-common"
+Requires-Dist: interegular; extra == "runtime-common"
+Requires-Dist: llguidance<0.8.0,>=0.7.11; extra == "runtime-common"
+Requires-Dist: modelscope; extra == "runtime-common"
+Requires-Dist: msgspec; extra == "runtime-common"
+Requires-Dist: ninja; extra == "runtime-common"
+Requires-Dist: orjson; extra == "runtime-common"
+Requires-Dist: outlines==0.1.11; extra == "runtime-common"
+Requires-Dist: packaging; extra == "runtime-common"
+Requires-Dist: partial_json_parser; extra == "runtime-common"
+Requires-Dist: pillow; extra == "runtime-common"
+Requires-Dist: prometheus-client>=0.20.0; extra == "runtime-common"
+Requires-Dist: psutil; extra == "runtime-common"
+Requires-Dist: pydantic; extra == "runtime-common"
+Requires-Dist: pynvml; extra == "runtime-common"
+Requires-Dist: pybase64; extra == "runtime-common"
+Requires-Dist: python-multipart; extra == "runtime-common"
+Requires-Dist: pyzmq>=25.1.2; extra == "runtime-common"
+Requires-Dist: sentencepiece; extra == "runtime-common"
+Requires-Dist: soundfile==0.13.1; extra == "runtime-common"
+Requires-Dist: scipy; extra == "runtime-common"
+Requires-Dist: torchao==0.9.0; extra == "runtime-common"
+Requires-Dist: transformers==4.53.2; extra == "runtime-common"
+Requires-Dist: timm==1.0.16; extra == "runtime-common"
+Requires-Dist: uvicorn; extra == "runtime-common"
+Requires-Dist: uvloop; extra == "runtime-common"
+Requires-Dist: xgrammar==0.1.21; extra == "runtime-common"
+Provides-Extra: srt
+Requires-Dist: sglang[runtime_common]; extra == "srt"
+Requires-Dist: sgl-kernel==0.2.7; extra == "srt"
+Requires-Dist: torch==2.7.1; extra == "srt"
+Requires-Dist: torchaudio==2.7.1; extra == "srt"
+Requires-Dist: torchvision==0.22.1; extra == "srt"
+Requires-Dist: cuda-python; extra == "srt"
+Requires-Dist: einops; extra == "srt"
+Requires-Dist: flashinfer_python==0.2.9rc1; extra == "srt"
+Provides-Extra: blackwell
+Requires-Dist: sglang[runtime_common]; extra == "blackwell"
+Requires-Dist: sgl-kernel; extra == "blackwell"
+Requires-Dist: torch==2.7.1; extra == "blackwell"
+Requires-Dist: torchaudio==2.7.1; extra == "blackwell"
+Requires-Dist: torchvision==0.22.1; extra == "blackwell"
+Requires-Dist: cuda-python; extra == "blackwell"
+Requires-Dist: einops; extra == "blackwell"
+Requires-Dist: flashinfer_python==0.2.9rc1; extra == "blackwell"
+Provides-Extra: srt-hip
+Requires-Dist: sglang[runtime_common]; extra == "srt-hip"
+Requires-Dist: torch; extra == "srt-hip"
+Requires-Dist: petit_kernel==0.0.2; extra == "srt-hip"
+Provides-Extra: srt-xpu
+Requires-Dist: sglang[runtime_common]; extra == "srt-xpu"
+Provides-Extra: srt-hpu
+Requires-Dist: sglang[runtime_common]; extra == "srt-hpu"
+Provides-Extra: srt-cpu
+Requires-Dist: sglang[runtime_common]; extra == "srt-cpu"
+Requires-Dist: einops; extra == "srt-cpu"
+Provides-Extra: srt-npu
+Requires-Dist: sglang[runtime_common]; extra == "srt-npu"
+Provides-Extra: openai
+Requires-Dist: openai>=1.0; extra == "openai"
+Requires-Dist: tiktoken; extra == "openai"
+Provides-Extra: anthropic
+Requires-Dist: anthropic>=0.20.0; extra == "anthropic"
+Provides-Extra: litellm
+Requires-Dist: litellm>=1.0.0; extra == "litellm"
+Provides-Extra: torch-memory-saver
+Requires-Dist: torch_memory_saver>=0.0.8; extra == "torch-memory-saver"
+Provides-Extra: decord
+Requires-Dist: decord; extra == "decord"
+Provides-Extra: test
+Requires-Dist: accelerate; extra == "test"
+Requires-Dist: jsonlines; extra == "test"
+Requires-Dist: matplotlib; extra == "test"
+Requires-Dist: pandas; extra == "test"
+Requires-Dist: peft; extra == "test"
+Requires-Dist: sentence_transformers; extra == "test"
+Provides-Extra: all
+Requires-Dist: sglang[srt]; extra == "all"
+Requires-Dist: sglang[openai]; extra == "all"
+Requires-Dist: sglang[anthropic]; extra == "all"
+Requires-Dist: sglang[litellm]; extra == "all"
+Requires-Dist: sglang[torch_memory_saver]; extra == "all"
+Requires-Dist: sglang[decord]; extra == "all"
+Provides-Extra: all-hip
+Requires-Dist: sglang[srt_hip]; extra == "all-hip"
+Requires-Dist: sglang[openai]; extra == "all-hip"
+Requires-Dist: sglang[anthropic]; extra == "all-hip"
+Requires-Dist: sglang[litellm]; extra == "all-hip"
+Requires-Dist: sglang[decord]; extra == "all-hip"
+Provides-Extra: all-xpu
+Requires-Dist: sglang[srt_xpu]; extra == "all-xpu"
+Requires-Dist: sglang[openai]; extra == "all-xpu"
+Requires-Dist: sglang[anthropic]; extra == "all-xpu"
+Requires-Dist: sglang[litellm]; extra == "all-xpu"
+Requires-Dist: sglang[decord]; extra == "all-xpu"
+Provides-Extra: all-hpu
+Requires-Dist: sglang[srt_hpu]; extra == "all-hpu"
+Requires-Dist: sglang[openai]; extra == "all-hpu"
+Requires-Dist: sglang[anthropic]; extra == "all-hpu"
+Requires-Dist: sglang[litellm]; extra == "all-hpu"
+Requires-Dist: sglang[decord]; extra == "all-hpu"
+Provides-Extra: all-cpu
+Requires-Dist: sglang[srt_cpu]; extra == "all-cpu"
+Requires-Dist: sglang[openai]; extra == "all-cpu"
+Requires-Dist: sglang[anthropic]; extra == "all-cpu"
+Requires-Dist: sglang[litellm]; extra == "all-cpu"
+Requires-Dist: sglang[decord]; extra == "all-cpu"
+Provides-Extra: all-npu
+Requires-Dist: sglang[srt_npu]; extra == "all-npu"
+Requires-Dist: sglang[openai]; extra == "all-npu"
+Requires-Dist: sglang[anthropic]; extra == "all-npu"
+Requires-Dist: sglang[litellm]; extra == "all-npu"
+Requires-Dist: sglang[decord]; extra == "all-npu"
+Provides-Extra: dev
+Requires-Dist: sglang[all]; extra == "dev"
+Requires-Dist: sglang[test]; extra == "dev"
+Provides-Extra: dev-hip
+Requires-Dist: sglang[all_hip]; extra == "dev-hip"
+Requires-Dist: sglang[test]; extra == "dev-hip"
+Provides-Extra: dev-xpu
+Requires-Dist: sglang[all_xpu]; extra == "dev-xpu"
+Requires-Dist: sglang[test]; extra == "dev-xpu"
+Provides-Extra: dev-hpu
+Requires-Dist: sglang[all_hpu]; extra == "dev-hpu"
+Requires-Dist: sglang[test]; extra == "dev-hpu"
+Provides-Extra: dev-cpu
+Requires-Dist: sglang[all_cpu]; extra == "dev-cpu"
+Requires-Dist: sglang[test]; extra == "dev-cpu"
