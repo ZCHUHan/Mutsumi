@@ -13,10 +13,6 @@ from infer_server import RobotRewardModel
 from llava.constants import DEFAULT_IMAGE_TOKEN
 from llava.conversation import conv_templates
 
-
-PLACEHOLDER_TOKEN_ID = 12983
-
-
 @dataclass
 class _KVCacheEntry:
     pixel_values: torch.Tensor
@@ -49,9 +45,55 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         self.cfg = cfg
         self._device_override = device
         self._dtype_override = dtype
-        bins = int(getattr(cfg, "diff_action_bins", 512))
-        min_action = float(getattr(cfg, "diff_action_min", -1.0))
-        max_action = float(getattr(cfg, "diff_action_max", 1.0))
+        cfg_get = (cfg.get if isinstance(cfg, dict) else lambda k, d=None: getattr(cfg, k, d))
+
+        # Keep score semantics explicit: the optimizer always maximizes "reward".
+        self.diff_score_mode = str(cfg_get("diff_score_mode", "reward")).lower()
+        if self.diff_score_mode not in {"reward", "energy"}:
+            raise ValueError(
+                f"cfg.diff_score_mode must be 'reward' or 'energy', got {self.diff_score_mode}"
+            )
+
+        # Support both new and legacy config keys for output activation.
+        activation_cfg = cfg_get(
+            "diff_reward_activation",
+            cfg_get("reward_output_activation", "identity"),
+        )
+        self.reward_output_activation = str(activation_cfg).lower()
+        if self.reward_output_activation not in {"identity", "softplus", "sigmoid"}:
+            raise ValueError(
+                "reward output activation must be one of "
+                "{'identity', 'softplus', 'sigmoid'}, "
+                f"got {self.reward_output_activation}"
+        )
+
+        # Placeholder consistency: must match training-time token.
+        self.placeholder_token = str(cfg_get("action_placeholder_token", "<ACT>"))
+        self.placeholder_id = int(
+            self.tokenizer.convert_tokens_to_ids(self.placeholder_token)
+        )
+        if self.placeholder_id == int(self.tokenizer.unk_token_id):
+            raise ValueError(
+                f"Unknown action_placeholder_token={self.placeholder_token}. "
+                "Make sure tokenizer and training config are aligned."
+            )
+        print(
+            "[diff_verifier] "
+            f"placeholder_token={self.placeholder_token} "
+            f"placeholder_id={self.placeholder_id} "
+            f"score_mode={self.diff_score_mode} "
+            f"activation={self.reward_output_activation}"
+        )
+
+        self._action_dim = int(cfg_get("action_dim", 7))
+        cfg_token_ids = cfg_get("diff_action_token_ids", None)
+        cfg_bins = cfg_get("diff_action_bins", None)
+        if cfg_bins is None and cfg_token_ids is not None:
+            bins = int(len(cfg_token_ids))
+        else:
+            bins = int(cfg_get("diff_action_bins", 512))
+        min_action = float(cfg_get("diff_action_min", -1.0))
+        max_action = float(cfg_get("diff_action_max", 1.0))
         self.action_tokenizer = ActionTokenizer(
             self.tokenizer,
             bins=bins,
@@ -71,13 +113,12 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         else:
             self._bin_centers = torch.linspace(self._min_action, self._max_action, self._num_bins)
         bin_width = float(self._bin_centers[1] - self._bin_centers[0]) if self._num_bins > 1 else 1.0
-        cfg_sigma = getattr(cfg, "diff_action_sigma", None)
+        cfg_sigma = cfg_get("diff_action_sigma", None)
         self._soft_sigma = float(cfg_sigma) if cfg_sigma is not None else bin_width
-        self._strict_token_check = bool(getattr(cfg, "diff_action_strict_token_check", True))
-        self._log_action_diag = bool(getattr(cfg, "diff_action_log_diagnostics", False))
+        self._strict_token_check = bool(cfg_get("diff_action_strict_token_check", True))
+        self._log_action_diag = bool(cfg_get("diff_action_log_diagnostics", False))
         self._action_diag_logged = False
         self._hard_action_token_ids = self._build_hard_action_token_ids()
-        cfg_token_ids = getattr(cfg, "diff_action_token_ids", None)
         if cfg_token_ids is not None:
             token_ids = torch.as_tensor(cfg_token_ids, dtype=torch.long).flatten()
             if token_ids.numel() != self._num_bins:
@@ -197,10 +238,10 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
             "shows the current observation from the robot's wrist-mounted camera. "
             f"The robot manipulation arm is attempting to {instruction}. "
             "Please evaluate the quality of the robot action.\n\n"
-            "The robot action (7D) is:\n"
+            f"The robot action ({self._action_dim}D) is:\n"
         )
-        # Keep leading/trailing spaces so each "placeholder" maps to a single token.
-        placeholders = " " + " ".join(["placeholder"] * 7) + " "
+        # Keep leading/trailing spaces so each placeholder maps to one token.
+        placeholders = " " + " ".join([self.placeholder_token] * self._action_dim) + " "
         suffix = "Quality score:"
         return prefix, placeholders, suffix
 
@@ -212,7 +253,7 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         full = self.DEFAULT_IMAGE_TOKEN + "\n" + prefix + placeholders + suffix
         conv = conv_template.copy()
         conv.append_message(conv.roles[0], full)
-        prompt = conv.get_prompt().replace("<image>", " placeholder ")
+        prompt = conv.get_prompt().replace("<image>", f" {self.placeholder_token} ")
         in_ids = self.tokenizer(
             prompt,
             return_tensors="pt",
@@ -221,22 +262,27 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
             truncation=True,
         ).input_ids
 
-        first_image_idx = (in_ids == PLACEHOLDER_TOKEN_ID).nonzero()
+        first_image_idx = (in_ids == self.placeholder_id).nonzero()
+        if first_image_idx.numel() == 0:
+            raise ValueError(
+                "Image placeholder token not found in prompt tokenization. "
+                f"placeholder_token={self.placeholder_token}, placeholder_id={self.placeholder_id}"
+            )
         start_idx = first_image_idx[0][1].item()
         in_ids[0, start_idx : start_idx + 1] = -200
         in_ids = in_ids[:, :-1]
 
-        action_positions = (in_ids[0] == PLACEHOLDER_TOKEN_ID).nonzero().flatten()
-        if action_positions.numel() != 7:
+        action_positions = (in_ids[0] == self.placeholder_id).nonzero().flatten()
+        if action_positions.numel() != self._action_dim:
             raise ValueError(
-                f"Expected 7 action placeholders, got {action_positions.numel()}."
+                f"Expected {self._action_dim} action placeholders, got {action_positions.numel()}."
             )
         action_positions = torch.sort(action_positions)[0]
         if not torch.all(
             action_positions
             == torch.arange(
                 action_positions[0],
-                action_positions[0] + 7,
+                action_positions[0] + self._action_dim,
                 device=action_positions.device,
             )
         ):
@@ -344,10 +390,10 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
                 raise ValueError("IMAGE_TOKEN_INDEX not found in input_ids.")
             image_idx = int(image_idx[0].item())
 
-            action_pos = (full_ids[0] == PLACEHOLDER_TOKEN_ID).nonzero().flatten()
-            if action_pos.numel() != 7:
+            action_pos = (full_ids[0] == self.placeholder_id).nonzero().flatten()
+            if action_pos.numel() != self._action_dim:
                 raise ValueError(
-                    f"Expected 7 action placeholders, got {action_pos.numel()}."
+                    f"Expected {self._action_dim} action placeholders, got {action_pos.numel()}."
                 )
             action_pos = torch.sort(action_pos)[0]
             shifted = action_pos + (action_pos > image_idx) * shift
@@ -409,8 +455,10 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         if actions.ndim != 2:
             raise ValueError("Actions must be a 2D tensor [batch, action_dim].")
         batch_size, action_dim = actions.shape
-        if action_dim != 7:
-            raise ValueError("Differentiable verifier expects 7D actions.")
+        if action_dim != self._action_dim:
+            raise ValueError(
+                f"Differentiable verifier expects {self._action_dim}D actions."
+            )
         if self._log_action_diag and not self._action_diag_logged:
             diag = self.action_token_diagnostics()
             print(
@@ -477,7 +525,17 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         last_hidden_state = outputs.last_hidden_state[:, -1, :].type_as(
             self.model.reward_head.weight
         )
-        rewards = self.model.reward_head(last_hidden_state).squeeze(-1)
+        raw_rewards = self.model.reward_head(last_hidden_state).squeeze(-1)
+        if self.reward_output_activation == "sigmoid":
+            rewards = torch.sigmoid(raw_rewards)
+        elif self.reward_output_activation == "softplus":
+            rewards = F.softplus(raw_rewards)
+        else:
+            rewards = raw_rewards
+
+        # If verifier output is "energy" (lower is better), convert to reward.
+        if self.diff_score_mode == "energy":
+            rewards = -rewards
         return rewards
 
     def _inject_action_embeddings(
@@ -516,7 +574,7 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
                 if image_idx.numel() == 0:
                     raise ValueError("IMAGE_TOKEN_INDEX not found in input_ids.")
                 image_idx = int(image_idx[0].item())
-                action_positions = (input_ids[b] == PLACEHOLDER_TOKEN_ID).nonzero().flatten()
+                action_positions = (input_ids[b] == self.placeholder_id).nonzero().flatten()
                 if action_positions.numel() != action_dim:
                     raise ValueError(
                         f"Expected {action_dim} action placeholders, got {action_positions.numel()}."
@@ -532,7 +590,7 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         if image_idx.numel() == 0:
             raise ValueError("IMAGE_TOKEN_INDEX not found in input_ids.")
         image_idx = int(image_idx[0].item())
-        action_positions = (ref_ids == PLACEHOLDER_TOKEN_ID).nonzero().flatten()
+        action_positions = (ref_ids == self.placeholder_id).nonzero().flatten()
         if action_positions.numel() != action_dim:
             raise ValueError(
                 f"Expected {action_dim} action placeholders, got {action_positions.numel()}."
