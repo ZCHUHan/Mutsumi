@@ -178,8 +178,18 @@ class RewardModel(transformers.PreTrainedModel):
                 raise
 
         if checkpoint_dir is not None:
-            reward_head_path = os.path.join(checkpoint_dir, "reward_head")
-            if os.path.exists(reward_head_path):
+            reward_head_candidates = [
+                os.path.join(checkpoint_dir, "reward_head"),
+                os.path.join(checkpoint_dir, "lora_adapter", "reward_head"),
+                os.path.join(checkpoint_dir, "adapter_model", "reward_head"),
+                os.path.join(
+                    checkpoint_dir, "lora_adapter", "adapter_model", "reward_head"
+                ),
+            ]
+            reward_head_path = next(
+                (p for p in reward_head_candidates if os.path.exists(p)), None
+            )
+            if reward_head_path is not None:
                 self.reward_head.load_state_dict(
                     torch.load(
                         reward_head_path,
@@ -187,7 +197,10 @@ class RewardModel(transformers.PreTrainedModel):
                     )
                 )
             else:
-                print(f"Warning: reward head not found at {reward_head_path}")
+                print(
+                    "Warning: reward head not found. Checked: "
+                    + ", ".join(reward_head_candidates)
+                )
 
         self.reward_head.requires_grad_(kwargs.get("is_trainable", False))
 
