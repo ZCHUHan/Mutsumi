@@ -130,7 +130,8 @@ class GenerateConfig:
     diff_action_strict_token_check: bool = True
     diff_action_log_diagnostics: bool = False
     diff_action_token_ids: Optional[list[int]] = None
-    action_placeholder_token: str = "<ACT>"
+    action_placeholder_token: str = "placeholder"
+    action_placeholder_id: int = 12983
     diff_score_mode: str = "energy"  # "reward" or "energy"
     diff_reward_activation: str = "softplus"  # "identity", "softplus", or "sigmoid"
     diff_consistency_config: Optional[str] = None

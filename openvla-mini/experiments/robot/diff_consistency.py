@@ -26,6 +26,7 @@ def apply_diff_consistency_config(cfg: Any) -> None:
     strict = bool(getattr(cfg, "diff_consistency_strict", True))
     required_keys = [
         "action_placeholder_token",
+        "action_placeholder_id",
         "action_dim",
         "diff_action_bins",
         "diff_action_min",
@@ -59,6 +60,7 @@ def apply_diff_consistency_config(cfg: Any) -> None:
 
     key_map = {
         "action_placeholder_token": "action_placeholder_token",
+        "action_placeholder_id": "action_placeholder_id",
         "action_dim": "action_dim",
         "diff_action_bins": "diff_action_bins",
         "diff_action_min": "diff_action_min",

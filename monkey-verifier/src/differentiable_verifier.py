@@ -67,16 +67,25 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
                 f"got {self.reward_output_activation}"
         )
 
-        # Placeholder consistency: must match training-time token.
-        self.placeholder_token = str(cfg_get("action_placeholder_token", "<ACT>"))
-        self.placeholder_id = int(
+        # Placeholder consistency: align refine path with legacy rerank path.
+        self.placeholder_token = str(cfg_get("action_placeholder_token", "placeholder"))
+        expected_placeholder_id = int(cfg_get("action_placeholder_id", 12983))
+        tokenizer_placeholder_id = int(
             self.tokenizer.convert_tokens_to_ids(self.placeholder_token)
         )
-        if self.placeholder_id == int(self.tokenizer.unk_token_id):
+        if tokenizer_placeholder_id == int(self.tokenizer.unk_token_id):
             raise ValueError(
                 f"Unknown action_placeholder_token={self.placeholder_token}. "
                 "Make sure tokenizer and training config are aligned."
             )
+        if tokenizer_placeholder_id != expected_placeholder_id:
+            raise ValueError(
+                "Placeholder id mismatch for refine verifier: "
+                f"token='{self.placeholder_token}' maps to id={tokenizer_placeholder_id}, "
+                f"but expected action_placeholder_id={expected_placeholder_id}. "
+                "Set diff_consistency_config or CLI args to keep refine and rerank consistent."
+            )
+        self.placeholder_id = expected_placeholder_id
         print(
             "[diff_verifier] "
             f"placeholder_token={self.placeholder_token} "
