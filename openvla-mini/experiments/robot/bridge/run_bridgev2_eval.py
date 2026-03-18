@@ -108,7 +108,7 @@ class GenerateConfig:
     action_refine_freeze_gripper: bool = True  # keep gripper fixed during refine
     action_refine_gripper_index: int = -1  # last action dim by default
     action_refine_every_n_steps: int = 1  # refine every N control steps
-    action_refine_start_step: int = 0  # first step index eligible for refine
+    action_refine_start_step: int = 1  # first step index eligible for refine (skip step 0)
     action_refine_end_step: Optional[int] = None  # optional last step index eligible for refine
     action_refine_skip_strategy: str = "first"  # "first" or "rerank"
     diff_action_bins: int = 512

@@ -495,10 +495,16 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         diff = actions.unsqueeze(-1) - centers
         weights = torch.softmax(-0.5 * (diff / sigma).pow(2), dim=-1)
 
+        # PDB-V1: soft kernel核心，检查 weights 的 sparsity（每行最大值是否接近1.0 = 接近hard）
+        #import pdb; pdb.set_trace()  # weights.max(-1).values, sigma, actions[0], centers[:5]
+
         token_ids = self._action_token_ids_on(device)
         token_embeds = backbone.get_model().embed_tokens(token_ids)
         token_embeds = token_embeds.to(device=device, dtype=dtype)
         action_embeds = torch.matmul(weights.to(dtype), token_embeds)
+
+        # PDB-V2: soft embedding结果，可对比 hard embedding: token_embeds[weights.argmax(-1)]
+        #import pdb; pdb.set_trace()  # action_embeds.shape, action_embeds[0,0,:5] vs hard
 
         suffix_embeds = cache_entry.suffix_embeds.expand(batch_size, -1, -1)
         cur_embeds = torch.cat([action_embeds, suffix_embeds], dim=1)
@@ -545,6 +551,9 @@ class DifferentiableRobotRewardModel(RobotRewardModel):
         # If verifier output is "energy" (lower is better), convert to reward.
         if self.diff_score_mode == "energy":
             rewards = -rewards
+
+        # PDB-V3: verifier最终输出，检查 raw_rewards vs rewards, grad_fn 是否存在
+        #import pdb; pdb.set_trace()  # raw_rewards, rewards, rewards.grad_fn, self.diff_score_mode
         return rewards
 
     def _inject_action_embeddings(

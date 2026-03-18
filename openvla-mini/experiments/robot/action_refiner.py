@@ -196,12 +196,15 @@ def refine_actions_with_grad(
     )
 
     actions = actions.detach().requires_grad_(True)
-    #import pdb; pdb.set_trace()
+    # PDB-R1: refine循环入口，检查初始 actions (requires_grad=True), prior mean/inv_var
+    #import pdb; pdb.set_trace()  # actions.shape, actions.requires_grad, mean.shape, inv_var
     reward_trace = [] if return_trace else None
     track_best = bool(track_best or select_mode == "best_rewards")
     best_actions = None
     best_rewards = None
     for step in range(int(steps)):
+        # PDB-R2: refine每一步，建议只在 step==0 时打开，检查 verifier.score 的输出
+        #if step == 0: import pdb; pdb.set_trace()  # step, actions, verifier type
         rewards = verifier.score(instruction, image_path, actions)
         if rewards.ndim == 0:
             rewards = rewards.expand(actions.shape[0])
@@ -255,6 +258,8 @@ def refine_actions_with_grad(
                 actions = torch.max(torch.min(actions, clamp_high), clamp_low)
             if freeze_gripper:
                 actions[..., gripper_index] = actions_init_t[..., gripper_index]
+            # PDB-R3: 梯度更新后，检查 grad norm, action变化量, clamp是否触边
+            #if step == int(steps) - 1: import pdb; pdb.set_trace()  # actions, grad.norm(), rewards
         actions = actions.detach().requires_grad_(True)
 
     if select_mode == "final_forward":

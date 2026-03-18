@@ -124,7 +124,7 @@ class GenerateConfig:
     action_refine_freeze_gripper: bool = True  # keep gripper fixed during refine
     action_refine_gripper_index: int = -1  # last action dim by default
     action_refine_every_n_steps: int = 1  # refine every N control steps
-    action_refine_start_step: int = 0  # first step index eligible for refine
+    action_refine_start_step: int = 1  # first step index eligible for refine (skip step 0)
     action_refine_end_step: Optional[int] = None  # optional last step index eligible for refine
     action_refine_skip_strategy: str = "first"  # "first" or "rerank"
     diff_action_bins: int = 512
@@ -312,6 +312,9 @@ def eval_simpler(cfg: GenerateConfig) -> None:
                     "state": obs["extra"]["tcp_pose"],
                 }
 
+                # PDB-E1: 每步决策前，检查 observation 图像和 step_idx
+                #import pdb; pdb.set_trace()  # t, task_description, img.shape, observation.keys()
+
                 # Query model to get action
                 if cfg.verifier_forward_eq_track:
                     reset_verifier_forward_eq()
@@ -336,6 +339,9 @@ def eval_simpler(cfg: GenerateConfig) -> None:
                 # # (0 = close, 1 = open), so flip it back (-1 = open, +1 = close) before executing the action
                 # if cfg.model_family in ["openvla", "prismatic"]:
                 #     action = invert_gripper_action(action)
+
+                # PDB-E2: 决策后，检查返回的 action 值域和维度
+                #import pdb; pdb.set_trace()  # action, action.shape, convert_maniskill(action)
 
                 # Execute action in environment
                 obs, reward, done, trunc, info = env.step(convert_maniskill(action))

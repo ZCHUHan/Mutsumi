@@ -419,13 +419,18 @@ def get_vla_action(
         temperature=1,
         cfg=cfg
     )
-    #import pdb; pdb.set_trace()
+    # PDB-1: VLA初始采样结果，检查 output_ids shape/range 和 actions 分布
+    #import pdb; pdb.set_trace()  # output_ids=[N,7] token ids, actions=[N,7] continuous
+
     # Preprocess initial actions
     use_action_refine = bool(getattr(cfg, "use_action_refine", False))
     if cfg.initial_samples == 1 and cfg.augmented_samples == 1 and not use_action_refine:
         return actions[0] 
     output_ids, actions = preprocess_actions(output_ids, actions)
-    #import pdb; pdb.set_trace()
+
+    # PDB-2: 预处理后（过滤非法token），看有多少有效候选被保留
+    #import pdb; pdb.set_trace()  # output_ids/actions filtered; check len(actions)
+
     _, unique = get_unique_actions(output_ids, actions)
 
     if len(unique) == 1 and not use_action_refine:
@@ -439,6 +444,9 @@ def get_vla_action(
 
         output_ids, actions = get_unique_actions(output_ids, actions)
         reward_img = str(Path("./transfer_images/reward_img.jpg").absolute())
+
+        # PDB-3: refine分支入口，检查去重后的候选数 len(actions)，以及 reward_img 是否存在
+        #import pdb; pdb.set_trace()  # actions=[K,7] unique candidates; os.path.exists(reward_img)
 
         refine_every = max(1, int(getattr(cfg, "action_refine_every_n_steps", 1)))
         refine_start = int(getattr(cfg, "action_refine_start_step", 0))
@@ -471,6 +479,8 @@ def get_vla_action(
                 should_refine = False
 
         if not should_refine:
+            # PDB-4: refine被跳过的step，检查 skip_strategy 决定走 "first" 还是 "rerank"
+            #import pdb; pdb.set_trace()  # skip_strategy, step_idx, len(actions)
             if skip_strategy == "rerank":
                 rewards = get_rewards(instruction, reward_img, output_ids, cfg=cfg)
                 _track_forward_eq(cfg, float(len(output_ids)), mode="refine_skip_rerank")
@@ -551,7 +561,8 @@ def get_vla_action(
                 _track_forward_eq(cfg, forward_eq_used, mode="refine")
         else:
             steps = int(getattr(cfg, "action_refine_steps", 10))
-            # import pdb; pdb.set_trace()
+            # PDB-5: 即将进入梯度refine（无budget），检查 steps, num_candidates, select_mode
+            #import pdb; pdb.set_trace()  # steps, refine_actions.shape, select_mode, lr, prox_weight
             result = refine_actions_with_grad(
                 actions_init=refine_actions,
                 instruction=instruction,
@@ -608,8 +619,12 @@ def get_vla_action(
         if use_normalize:
             refined_actions = converter.unnormalize_actions(refined_actions)
         selected_index = int(np.argmax(result.rewards))
-        # import pdb; pdb.set_trace()
+        # PDB-6: refine完成，检查 result.rewards 分布、selected_index、refined vs 原始 actions 差异
+        # import pdb; pdb.set_trace()  # result.rewards, selected_index, np.linalg.norm(refined_actions - actions, axis=-1)
         return refined_actions[selected_index]
+
+    # PDB-7: rerank基线路径入口（只有 use_action_refine=False 时才会到这里）
+    #import pdb; pdb.set_trace()  # actions.shape, cfg.augmented_samples, cfg.verifier_forward_eq_budget
 
     # Generate augmented samples based on the mean and variance of a batch of actions.
     budget_forward_eq = getattr(cfg, "verifier_forward_eq_budget", None)
@@ -643,6 +658,9 @@ def get_vla_action(
                 f"strategy={strategy}",
             )
     rewards = get_rewards(instruction, reward_img, output_ids, cfg=cfg)
+    # PDB-8: rerank打分结果，检查 rewards 分布和候选动作
+    #import pdb; pdb.set_trace()  # rewards, output_ids.shape, actions.shape, np.argmax(rewards)
+
     forward_eq_used = float(len(output_ids))
     if _budget_applies(cfg, "rerank"):
         _log_forward_eq(
