@@ -80,8 +80,6 @@ def _get_differentiable_verifier(cfg):
     if not _DIFF_VERIFIER_LOGGED:
         name = f"{_DIFF_VERIFIER.__class__.__module__}.{_DIFF_VERIFIER.__class__.__name__}"
         print(f"[verifier] differentiable verifier={name}")
-        if _DIFF_VERIFIER.__class__.__name__ == "ActionOnlyVerifier":
-            print("[verifier][warning] fallback ActionOnlyVerifier in use; reward alignment may be weak.")
         _DIFF_VERIFIER_LOGGED = True
     return _DIFF_VERIFIER
 

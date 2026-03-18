@@ -10,7 +10,6 @@ from typing import Optional
 import numpy as np
 import torch
 
-from experiments.robot.differentiable_scorer import ActionOnlyCritic
 import traceback
 
 class DifferentiableVerifier:
@@ -24,36 +23,11 @@ class DifferentiableVerifier:
         raise NotImplementedError
 
 
-class ActionOnlyVerifier(DifferentiableVerifier):
-    """Fallback verifier that ignores instruction/image and scores actions only."""
-
-    def __init__(
-        self,
-        action_dim: int,
-        hidden_dim: int = 256,
-        checkpoint: Optional[str] = None,
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ) -> None:
-        self.model = ActionOnlyCritic(action_dim=action_dim, hidden_dim=hidden_dim)
-        if checkpoint:
-            state = torch.load(checkpoint, map_location="cpu")
-            self.model.load_state_dict(state)
-        if device is not None or dtype is not None:
-            self.model = self.model.to(device=device, dtype=dtype)
-        self.model.eval()
-
-    def score(self, instruction: str, image_path: str, actions: torch.Tensor) -> torch.Tensor:
-        return self.model(None, actions)
-
-
 def load_differentiable_verifier(cfg, device: torch.device, dtype: torch.dtype) -> DifferentiableVerifier:
     module_path = getattr(cfg, "diff_verifier_module", None)
     class_name = getattr(cfg, "diff_verifier_class", None)
-    used_default = False
 
     if module_path is None:
-        used_default = True
         module_path = "differentiable_verifier"
         class_name = "DifferentiableRobotRewardModel"
         repo_root = Path(__file__).resolve().parents[3]
@@ -70,27 +44,17 @@ def load_differentiable_verifier(cfg, device: torch.device, dtype: torch.dtype) 
             except TypeError:
                 return cls()
         except Exception as exc:
-            if not used_default:
-                raise
-            print(
-                "[verifier][warning] Failed to load DifferentiableRobotRewardModel; "
-                f"falling back to ActionOnlyVerifier. error={exc}"
-            )
-            print("[verifier][traceback]\n" + traceback.format_exc())
+            raise RuntimeError(
+                "Failed to load differentiable verifier. "
+                "This project is configured to require monkey-verifier for refine mode "
+                "(fallback is disabled). "
+                f"module={module_path} class={class_name} error={exc}\n"
+                + traceback.format_exc()
+            ) from exc
 
-    hidden_dim = int(getattr(cfg, "diff_verifier_hidden_dim", 256))
-    checkpoint = getattr(cfg, "diff_verifier_ckpt", None)
-    action_dim = int(getattr(cfg, "action_dim", 7))
-    
-    mod = importlib.import_module(module_path)
-    print(f"[verifier][debug] module file: {mod.__file__}")
-
-    return ActionOnlyVerifier(
-        action_dim=action_dim,
-        hidden_dim=hidden_dim,
-        checkpoint=checkpoint,
-        device=device,
-        dtype=dtype,
+    raise ValueError(
+        "Invalid differentiable verifier config: expected both "
+        "diff_verifier_module and diff_verifier_class (or neither to use defaults)."
     )
 
 
