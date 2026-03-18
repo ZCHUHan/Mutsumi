@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import hashlib
 import numpy as np
 from PIL import Image
 from fastapi import FastAPI, HTTPException, Request
@@ -27,12 +28,101 @@ from llava.conversation import conv_templates
 from llava.constants import DEFAULT_IMAGE_TOKEN
 from llava.train.train import smart_tokenizer_and_embedding_resize
 
+
+def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fin:
+        while True:
+            block = fin.read(chunk_size)
+            if not block:
+                break
+            h.update(block)
+    return h.hexdigest()
+
+
+def _resolve_verifier_paths() -> tuple[str, str]:
+    model_root = os.path.abspath(os.environ.get("MODEL_DIR", "./model_dir"))
+    checkpoint_dir = os.environ.get("VERIFIER_CHECKPOINT_DIR")
+    if checkpoint_dir is None or checkpoint_dir.strip() == "":
+        checkpoint_dir = os.path.join(model_root, "lora_adapter")
+    checkpoint_dir = os.path.abspath(checkpoint_dir)
+    return model_root, checkpoint_dir
+
+
+def _resolve_adapter_dir(checkpoint_dir: str) -> str:
+    adapter_dir = checkpoint_dir
+    if os.path.exists(os.path.join(adapter_dir, "adapter_model")):
+        adapter_dir = os.path.join(adapter_dir, "adapter_model")
+    if os.path.exists(os.path.join(adapter_dir, "lora_default")):
+        adapter_dir = os.path.join(adapter_dir, "lora_default")
+    return adapter_dir
+
+
+def _resolve_reward_head_path(checkpoint_dir: str) -> str | None:
+    reward_head_candidates = [
+        os.path.join(checkpoint_dir, "reward_head"),
+        os.path.join(checkpoint_dir, "lora_adapter", "reward_head"),
+        os.path.join(checkpoint_dir, "adapter_model", "reward_head"),
+        os.path.join(checkpoint_dir, "lora_adapter", "adapter_model", "reward_head"),
+    ]
+    return next((p for p in reward_head_candidates if os.path.exists(p)), None)
+
+
+def _log_checkpoint_selection(model_root: str, checkpoint_dir: str) -> None:
+    print(f"[verifier] MODEL_DIR={model_root}")
+    print(f"[verifier] VERIFIER_CHECKPOINT_DIR={checkpoint_dir}")
+    if not os.path.exists(checkpoint_dir):
+        raise FileNotFoundError(
+            "Verifier checkpoint directory not found: "
+            f"{checkpoint_dir}. "
+            "Set VERIFIER_CHECKPOINT_DIR to a directory that contains "
+            "adapter_model/ and reward_head."
+        )
+
+    adapter_dir = _resolve_adapter_dir(checkpoint_dir)
+    adapter_config = os.path.join(adapter_dir, "adapter_config.json")
+    adapter_model = os.path.join(adapter_dir, "adapter_model.bin")
+    reward_head = _resolve_reward_head_path(checkpoint_dir)
+
+    print(f"[verifier] resolved_adapter_dir={adapter_dir}")
+    if os.path.exists(adapter_config):
+        print(
+            "[verifier] adapter_config="
+            f"{adapter_config} sha256={_sha256_file(adapter_config)}"
+        )
+    else:
+        print(f"[verifier][warning] adapter_config.json not found under {adapter_dir}")
+
+    if os.path.exists(adapter_model):
+        print(
+            "[verifier] adapter_model="
+            f"{adapter_model} sha256={_sha256_file(adapter_model)}"
+        )
+    else:
+        print(f"[verifier][warning] adapter_model.bin not found under {adapter_dir}")
+
+    if reward_head is not None:
+        print(f"[verifier] reward_head={reward_head} sha256={_sha256_file(reward_head)}")
+    else:
+        print(
+            "[verifier][warning] reward_head not found in checkpoint dir hierarchy "
+            f"under {checkpoint_dir}"
+        )
+
+
 class RobotRewardModel:
     def __init__(self):
+        model_root, checkpoint_dir = _resolve_verifier_paths()
+        _log_checkpoint_selection(model_root, checkpoint_dir)
+        self.model_root = model_root
+        self.checkpoint_dir = checkpoint_dir
+
         # Parse arguments from environment variables and defaults based on the shell script
         model_args = ModelArguments(
-            model_name_or_path=os.path.join(os.environ.get("MODEL_DIR", "./model_dir"), 
-                                          "llava-v1.5-7b/sft_model/"),
+            model_name_or_path=os.path.join(
+                model_root,
+                "llava-v1.5-7b/sft_model/",
+            ),
             vision_tower="openai/clip-vit-large-patch14-336",
             mm_vision_select_layer=-2,
             mm_use_im_start_end=False,
@@ -53,8 +143,10 @@ class RobotRewardModel:
             bits=16,
             lora_r=64,
             lora_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-            output_dir=os.path.join(os.environ.get("MODEL_DIR", "./model_dir"), 
-                                   "llava-v1.5-7b"),
+            output_dir=os.path.join(
+                model_root,
+                "llava-v1.5-7b",
+            ),
             freeze_mm_mlp_adapter=True,
             group_by_length=False,
             bf16=True,
@@ -136,7 +228,7 @@ class RobotRewardModel:
                         args=args,
                         config=config,
                         qlora=True,
-                        checkpoint_dir=os.path.join(os.environ.get("MODEL_DIR", "./model_dir"), "lora_adapter"),
+                        checkpoint_dir=checkpoint_dir,
                         tokenizer=tokenizer,
                     )
                 finally:
