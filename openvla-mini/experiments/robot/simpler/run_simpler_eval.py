@@ -1,7 +1,7 @@
 """
-run_simpler_eval.py
+run_libero_eval.py
 
-Runs a model in a SIMPLER simulation environment.
+Runs a model in a LIBERO simulation environment.
 
 Usage:
     # OpenVLA:
@@ -39,16 +39,10 @@ from experiments.robot.simpler.simpler_utils import (
 
 # Append current directory so that interpreter can find experiments.robot
 sys.path.append("../..")
-from experiments.robot.diff_consistency import (
-    apply_diff_consistency_config,
-    warn_missing_diff_consistency,
-)
 from experiments.robot.openvla_utils import (
-    get_processor,
-    get_verifier_forward_eq,
-    reset_verifier_forward_eq,
     save_rollout_video,
 )
+from experiments.robot.openvla_utils import get_processor
 from experiments.robot.robot_utils import (
     DATE_TIME,
     get_action,
@@ -104,53 +98,6 @@ class GenerateConfig:
     augmented_samples: int = 32
     action_server_port: int = 3200
     reward_server_port: int = 3100
-    reward_batch_size: int = 2
-
-    # Differentiable action refinement
-    use_action_refine: bool = False
-    action_refine_steps: int = 10
-    action_refine_lr: float = 1e-2
-    action_refine_prox_weight: float = 0.1
-    action_refine_prior: str = "diag"  # "diag" or "l2"
-    action_refine_eps: float = 1e-6
-    action_refine_clamp: bool = True
-    action_refine_select: str = "final_forward"  # "final_forward", "last_rewards", "best_rewards"
-    action_refine_normalize: bool = True
-    action_refine_log_every: int = 0
-    action_refine_allocation: str = "uniform"  # "uniform" or "adaptive"
-    action_refine_warmup_steps: int = 2
-    action_refine_min_steps: int = 1
-    action_refine_max_steps: Optional[int] = None
-    action_refine_freeze_gripper: bool = True  # keep gripper fixed during refine
-    action_refine_gripper_index: int = -1  # last action dim by default
-    action_refine_every_n_steps: int = 1  # refine every N control steps
-    action_refine_start_step: int = 1  # first step index eligible for refine (skip step 0)
-    action_refine_end_step: Optional[int] = None  # optional last step index eligible for refine
-    action_refine_skip_strategy: str = "first"  # "first" or "rerank"
-    diff_action_bins: int = 512
-    diff_action_min: float = -1.0
-    diff_action_max: float = 1.0
-    diff_action_sigma: Optional[float] = 0.008
-    diff_action_strict_token_check: bool = True
-    diff_action_log_diagnostics: bool = False
-    diff_action_token_ids: Optional[list[int]] = None
-    action_placeholder_token: str = "placeholder"
-    action_placeholder_id: int = 12983
-    diff_score_mode: str = "energy"  # "reward" or "energy"
-    diff_reward_activation: str = "softplus"  # "identity", "softplus", or "sigmoid"
-    diff_consistency_config: Optional[str] = None
-    diff_consistency_strict: bool = True
-    diff_verifier_module: Optional[str] = None
-    diff_verifier_class: Optional[str] = None
-    diff_verifier_hidden_dim: int = 256
-    diff_verifier_ckpt: Optional[str] = None
-    action_dim: int = 7
-    verifier_forward_eq_budget: Optional[float] = None
-    verifier_forward_eq_backward_ratio: float = 2.0
-    verifier_budget_apply_to: str = "both"  # "rerank", "refine", or "both"
-    verifier_budget_rerank_strategy: str = "first"  # "first" or "random"
-    verifier_forward_eq_log: bool = True
-    verifier_forward_eq_track: bool = False
 
 @draccus.wrap()
 def eval_simpler(cfg: GenerateConfig) -> None:
@@ -164,10 +111,6 @@ def eval_simpler(cfg: GenerateConfig) -> None:
 
     # Set random seed
     set_seed_everywhere(cfg.seed)
-
-    # If provided, force inference-time verifier config to match training export.
-    apply_diff_consistency_config(cfg)
-    warn_missing_diff_consistency(cfg)
 
     # [OpenVLA] Set action un-normalization key
     if cfg.model_family == "prismatic":
@@ -220,7 +163,6 @@ def eval_simpler(cfg: GenerateConfig) -> None:
 
     # Start evaluation
     total_episodes, total_successes = 0, 0
-    total_verifier_forward_eq = 0.0
     for task_id in tqdm.tqdm(range(num_tasks_in_suite)):
         # Get task
         task = task_suite.get_task(task_id)
@@ -250,8 +192,6 @@ def eval_simpler(cfg: GenerateConfig) -> None:
             t = 0
             replay_images = []
             replay_wrist_images = []
-            episode_verifier_forward_eq = 0.0
-            episode_verifier_steps = 0
             if cfg.task_suite_name == "libero_spatial":
                 max_steps = 220  # longest training demo has 193 steps
             elif cfg.task_suite_name == "libero_object":
@@ -312,25 +252,14 @@ def eval_simpler(cfg: GenerateConfig) -> None:
                     "state": obs["extra"]["tcp_pose"],
                 }
 
-                # PDB-E1: 每步决策前，检查 observation 图像和 step_idx
-                #import pdb; pdb.set_trace()  # t, task_description, img.shape, observation.keys()
-
                 # Query model to get action
-                if cfg.verifier_forward_eq_track:
-                    reset_verifier_forward_eq()
                 action = get_action(
                     cfg,
                     model,
                     observation,
                     task_description,
                     processor=None,
-                    step_idx=t,
                 )
-                if cfg.verifier_forward_eq_track:
-                    forward_eq_info = get_verifier_forward_eq()
-                    step_forward_eq = float(forward_eq_info.get("last", 0.0))
-                    episode_verifier_forward_eq += step_forward_eq
-                    episode_verifier_steps += 1
 
                 # TODO figure out if below is libero only
                 # # Normalize gripper action [0,1] -> [-1,+1] because the environment expects the latter
@@ -339,9 +268,6 @@ def eval_simpler(cfg: GenerateConfig) -> None:
                 # # (0 = close, 1 = open), so flip it back (-1 = open, +1 = close) before executing the action
                 # if cfg.model_family in ["openvla", "prismatic"]:
                 #     action = invert_gripper_action(action)
-
-                # PDB-E2: 决策后，检查返回的 action 值域和维度
-                #import pdb; pdb.set_trace()  # action, action.shape, convert_maniskill(action)
 
                 # Execute action in environment
                 obs, reward, done, trunc, info = env.step(convert_maniskill(action))
@@ -363,26 +289,6 @@ def eval_simpler(cfg: GenerateConfig) -> None:
             save_rollout_video(
                 replay_images, total_episodes, success=done, task_description=task_description, log_file=log_file
             )
-
-            if cfg.verifier_forward_eq_track:
-                total_verifier_forward_eq += episode_verifier_forward_eq
-                avg_forward_eq = (
-                    episode_verifier_forward_eq / max(1, episode_verifier_steps)
-                    if episode_verifier_steps > 0
-                    else 0.0
-                )
-                log_file.write(f"verifier_forward_eq_episode={episode_verifier_forward_eq:.1f}\n")
-                log_file.write(f"verifier_forward_eq_per_step={avg_forward_eq:.3f}\n")
-                log_file.write(f"verifier_forward_eq_total={total_verifier_forward_eq:.1f}\n")
-                if cfg.use_wandb:
-                    wandb.log(
-                        {
-                            "verifier_forward_eq/episode": episode_verifier_forward_eq,
-                            "verifier_forward_eq/per_step": avg_forward_eq,
-                            "verifier_forward_eq/total": total_verifier_forward_eq,
-                            "verifier_forward_eq/steps": episode_verifier_steps,
-                        }
-                    )
 
             # Save at most 5 successes and at most 5 failures
             if cfg.use_wandb and ((done and task_successes < 5) or (not done and task_episodes - task_successes < 5)):

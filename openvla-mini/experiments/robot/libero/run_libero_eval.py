@@ -32,10 +32,6 @@ import wandb
 
 # Append current directory so that interpreter can find experiments.robot
 sys.path.append("../..")
-from experiments.robot.diff_consistency import (
-    apply_diff_consistency_config,
-    warn_missing_diff_consistency,
-)
 from experiments.robot.libero.libero_utils import (
     get_libero_dummy_action,
     get_libero_env,
@@ -95,59 +91,6 @@ class GenerateConfig:
 
     # fmt: on
 
-    # Robomonkey Config
-    initial_samples: int = 5
-    augmented_samples: int = 32
-    action_server_port: int = 3200
-    reward_server_port: int = 3100
-    reward_batch_size: int = 2
-
-    # Differentiable action refinement
-    use_action_refine: bool = False
-    action_refine_steps: int = 10
-    action_refine_lr: float = 1e-2
-    action_refine_prox_weight: float = 0.1
-    action_refine_prior: str = "diag"  # "diag" or "l2"
-    action_refine_eps: float = 1e-6
-    action_refine_clamp: bool = True
-    action_refine_select: str = "final_forward"  # "final_forward", "last_rewards", "best_rewards"
-    action_refine_normalize: bool = True
-    action_refine_log_every: int = 0
-    action_refine_allocation: str = "uniform"  # "uniform" or "adaptive"
-    action_refine_warmup_steps: int = 2
-    action_refine_min_steps: int = 1
-    action_refine_max_steps: Optional[int] = None
-    action_refine_freeze_gripper: bool = True  # keep gripper fixed during refine
-    action_refine_gripper_index: int = -1  # last action dim by default
-    action_refine_every_n_steps: int = 1  # refine every N control steps
-    action_refine_start_step: int = 1  # first step index eligible for refine (skip step 0)
-    action_refine_end_step: Optional[int] = None  # optional last step index eligible for refine
-    action_refine_skip_strategy: str = "first"  # "first" or "rerank"
-    diff_action_bins: int = 512
-    diff_action_min: float = -1.0
-    diff_action_max: float = 1.0
-    diff_action_sigma: Optional[float] = 0.008
-    diff_action_strict_token_check: bool = True
-    diff_action_log_diagnostics: bool = False
-    diff_action_token_ids: Optional[list[int]] = None
-    action_placeholder_token: str = "placeholder"
-    action_placeholder_id: int = 12983
-    diff_score_mode: str = "energy"  # "reward" or "energy"
-    diff_reward_activation: str = "softplus"  # "identity", "softplus", or "sigmoid"
-    diff_consistency_config: Optional[str] = None
-    diff_consistency_strict: bool = True
-    diff_verifier_module: Optional[str] = None
-    diff_verifier_class: Optional[str] = None
-    diff_verifier_hidden_dim: int = 256
-    diff_verifier_ckpt: Optional[str] = None
-    action_dim: int = 7
-    verifier_forward_eq_budget: Optional[float] = None
-    verifier_forward_eq_backward_ratio: float = 2.0
-    verifier_budget_apply_to: str = "both"  # "rerank", "refine", or "both"
-    verifier_budget_rerank_strategy: str = "first"  # "first" or "random"
-    verifier_forward_eq_log: bool = True
-    verifier_forward_eq_track: bool = False
-
 
 @draccus.wrap()
 def eval_libero(cfg: GenerateConfig) -> None:
@@ -155,13 +98,9 @@ def eval_libero(cfg: GenerateConfig) -> None:
     if "image_aug" in cfg.pretrained_checkpoint:
         assert cfg.center_crop, "Expecting `center_crop==True` because model was trained with image augmentations!"
     assert not (cfg.load_in_8bit and cfg.load_in_4bit), "Cannot use both 8-bit and 4-bit quantization!"
-    assert cfg.initial_samples > 0, "Invalid initial_samples: should be > 0"
-    assert cfg.augmented_samples > 0, "Invalid augmented_samples: should be > 0"
 
     # Set random seed
     set_seed_everywhere(cfg.seed)
-    apply_diff_consistency_config(cfg)
-    warn_missing_diff_consistency(cfg)
 
     # [OpenVLA] Set action un-normalization key
     cfg.unnorm_key = cfg.task_suite_name
@@ -301,7 +240,6 @@ def eval_libero(cfg: GenerateConfig) -> None:
                         observation,
                         task_description,
                         processor=processor,
-                        step_idx=t,
                     )
 
                     # Normalize gripper action [0,1] -> [-1,+1] because the environment expects the latter
