@@ -24,49 +24,12 @@ from experiments.robot.token_action_converter import TokenActionConverter
 from experiments.robot.action_refiner import (
     load_differentiable_verifier,
     refine_actions_with_grad,
-    refine_actions_with_budget,
 )
 
 _DIFF_VERIFIER = None
 _DIFF_VERIFIER_LOGGED = False
-_VERIFIER_FORWARD_EQ_TOTAL = 0.0
-_VERIFIER_FORWARD_EQ_LAST = 0.0
-_VERIFIER_FORWARD_EQ_LAST_META = None
 _REFINE_SKIP_AUG_LOGGED = False
 _REFINE_POLICY_LOGGED = False
-
-
-def reset_verifier_forward_eq() -> None:
-    global _VERIFIER_FORWARD_EQ_TOTAL, _VERIFIER_FORWARD_EQ_LAST, _VERIFIER_FORWARD_EQ_LAST_META
-    _VERIFIER_FORWARD_EQ_TOTAL = 0.0
-    _VERIFIER_FORWARD_EQ_LAST = 0.0
-    _VERIFIER_FORWARD_EQ_LAST_META = None
-
-
-def get_verifier_forward_eq() -> dict:
-    return {
-        "total": float(_VERIFIER_FORWARD_EQ_TOTAL),
-        "last": float(_VERIFIER_FORWARD_EQ_LAST),
-        "last_meta": _VERIFIER_FORWARD_EQ_LAST_META,
-    }
-
-
-def _track_forward_eq(cfg, forward_eq_used, mode=None, meta=None) -> None:
-    if not bool(getattr(cfg, "verifier_forward_eq_track", False)):
-        return
-    global _VERIFIER_FORWARD_EQ_TOTAL, _VERIFIER_FORWARD_EQ_LAST, _VERIFIER_FORWARD_EQ_LAST_META
-    value = float(forward_eq_used)
-    _VERIFIER_FORWARD_EQ_TOTAL += value
-    _VERIFIER_FORWARD_EQ_LAST = value
-    if mode is None and meta is None:
-        _VERIFIER_FORWARD_EQ_LAST_META = None
-    else:
-        detail = {}
-        if mode is not None:
-            detail["mode"] = str(mode)
-        if meta:
-            detail.update(meta)
-        _VERIFIER_FORWARD_EQ_LAST_META = detail
 
 
 def _get_differentiable_verifier(cfg):
@@ -82,16 +45,6 @@ def _get_differentiable_verifier(cfg):
         print(f"[verifier] differentiable verifier={name}")
         _DIFF_VERIFIER_LOGGED = True
     return _DIFF_VERIFIER
-
-
-def _budget_applies(cfg, mode: str) -> bool:
-    apply_to = str(getattr(cfg, "verifier_budget_apply_to", "both")).lower()
-    return apply_to in {"both", mode}
-
-
-def _log_forward_eq(cfg, message: str) -> None:
-    if bool(getattr(cfg, "verifier_forward_eq_log", True)):
-        print(message)
 
 
 def preprocess_actions(output_ids, action):
@@ -481,19 +434,12 @@ def get_vla_action(
             #import pdb; pdb.set_trace()  # skip_strategy, step_idx, len(actions)
             if skip_strategy == "rerank":
                 rewards = get_rewards(instruction, reward_img, output_ids, cfg=cfg)
-                _track_forward_eq(cfg, float(len(output_ids)), mode="refine_skip_rerank")
                 return actions[int(np.argmax(rewards))]
             return actions[0]
 
         verifier = _get_differentiable_verifier(cfg)
         converter = TokenActionConverter(unnorm_key=cfg.unnorm_key)
         use_normalize = bool(getattr(cfg, "action_refine_normalize", True))
-        budget_forward_eq = getattr(cfg, "verifier_forward_eq_budget", None)
-        backward_eq = float(getattr(cfg, "verifier_forward_eq_backward_ratio", 2.0))
-        allocation = str(getattr(cfg, "action_refine_allocation", "uniform"))
-        warmup_steps = int(getattr(cfg, "action_refine_warmup_steps", 2))
-        min_steps = int(getattr(cfg, "action_refine_min_steps", 1))
-        max_steps = getattr(cfg, "action_refine_max_steps", None)
         freeze_gripper = bool(getattr(cfg, "action_refine_freeze_gripper", True))
         gripper_index = int(getattr(cfg, "action_refine_gripper_index", -1))
         if use_normalize:
@@ -525,94 +471,29 @@ def get_vla_action(
                 clamp_low = torch.where(mask_t, low_t, torch.full_like(low_t, -float("inf")))
                 clamp_high = torch.where(mask_t, high_t, torch.full_like(high_t, float("inf")))
 
+        steps = int(getattr(cfg, "action_refine_steps", 10))
         select_mode = str(getattr(cfg, "action_refine_select", "best_rewards"))
-        if budget_forward_eq is not None and _budget_applies(cfg, "refine"):
-            result = refine_actions_with_budget(
-                actions_init=refine_actions,
-                instruction=instruction,
-                image_path=reward_img,
-                verifier=verifier,
-                budget_forward_eq=float(budget_forward_eq),
-                backward_eq=backward_eq,
-                allocation=allocation,
-                cap_strategy=str(getattr(cfg, "verifier_budget_rerank_strategy", "first")),
-                warmup_steps=warmup_steps,
-                min_steps=min_steps,
-                max_steps=None if max_steps is None else int(max_steps),
-                lr=float(getattr(cfg, "action_refine_lr", 1e-2)),
-                prox_weight=float(getattr(cfg, "action_refine_prox_weight", 0.1)),
-                prior_mode=str(getattr(cfg, "action_refine_prior", "diag")),
-                eps=float(getattr(cfg, "action_refine_eps", 1e-6)),
-                select_mode=select_mode,
-                log_every=int(getattr(cfg, "action_refine_log_every", 0)),
-                clamp_low=clamp_low,
-                clamp_high=clamp_high,
-                prior_mean=refine_actions,
-                freeze_gripper=freeze_gripper,
-                gripper_index=gripper_index,
-                device=DEVICE,
-                dtype=torch.float32,
-            )
-            if result.stats is not None:
-                stats = result.stats
-                forward_eq_used = float(stats.get("forward_eq_used", 0.0))
-                _track_forward_eq(cfg, forward_eq_used, mode="refine")
-        else:
-            steps = int(getattr(cfg, "action_refine_steps", 10))
-            # PDB-5: 即将进入梯度refine（无budget），检查 steps, num_candidates, select_mode
-            #import pdb; pdb.set_trace()  # steps, refine_actions.shape, select_mode, lr, prox_weight
-            result = refine_actions_with_grad(
-                actions_init=refine_actions,
-                instruction=instruction,
-                image_path=reward_img,
-                verifier=verifier,
-                steps=steps,
-                lr=float(getattr(cfg, "action_refine_lr", 1e-2)),
-                prox_weight=float(getattr(cfg, "action_refine_prox_weight", 0.1)),
-                prior_mode=str(getattr(cfg, "action_refine_prior", "diag")),
-                eps=float(getattr(cfg, "action_refine_eps", 1e-6)),
-                select_mode=select_mode,
-                log_every=int(getattr(cfg, "action_refine_log_every", 0)),
-                clamp_low=clamp_low,
-                clamp_high=clamp_high,
-                freeze_gripper=freeze_gripper,
-                gripper_index=gripper_index,
-                device=DEVICE,
-                dtype=torch.float32,
-            )
-            num_candidates = int(refine_actions.shape[0])
-            extra_forward = num_candidates if select_mode == "final_forward" else 0
-            forward_eq_used = num_candidates * steps * (1.0 + backward_eq) + extra_forward
-            if _budget_applies(cfg, "refine"):
-                _log_forward_eq(
-                    cfg,
-                    "[verifier_budget][refine] "
-                    f"forward_eq_used={forward_eq_used:.1f} "
-                    f"num_candidates={num_candidates} "
-                    f"steps={steps} "
-                    f"select_mode={select_mode}",
-                )
-            _track_forward_eq(cfg, forward_eq_used, mode="refine")
-        if result.stats is not None:
-            stats = result.stats
-            _log_forward_eq(
-                cfg,
-                "[verifier_budget][refine] "
-                f"forward_eq_used={stats.get('forward_eq_used', 0):.1f} "
-                f"budget={stats.get('forward_eq_budget', None)} "
-                f"num_candidates={stats.get('num_candidates', 0)} "
-                f"allocation={stats.get('allocation', '')} "
-                f"steps_per_candidate={stats.get('steps_per_candidate', None)}",
-            )
-            if bool(stats.get("truncated_candidates", False)):
-                _log_forward_eq(
-                    cfg,
-                    "[verifier_budget][refine] "
-                    f"truncated_candidates orig={stats.get('orig_candidates', None)} "
-                    f"kept={stats.get('num_candidates', None)} "
-                    f"budget_steps={stats.get('budget_steps', None)} "
-                    f"min_steps={stats.get('min_steps', None)}",
-                )
+        # PDB-5: 即将进入梯度refine，检查 steps, num_candidates, select_mode
+        #import pdb; pdb.set_trace()  # steps, refine_actions.shape, select_mode, lr, prox_weight
+        result = refine_actions_with_grad(
+            actions_init=refine_actions,
+            instruction=instruction,
+            image_path=reward_img,
+            verifier=verifier,
+            steps=steps,
+            lr=float(getattr(cfg, "action_refine_lr", 1e-2)),
+            prox_weight=float(getattr(cfg, "action_refine_prox_weight", 0.1)),
+            prior_mode=str(getattr(cfg, "action_refine_prior", "diag")),
+            eps=float(getattr(cfg, "action_refine_eps", 1e-6)),
+            select_mode=select_mode,
+            log_every=int(getattr(cfg, "action_refine_log_every", 0)),
+            clamp_low=clamp_low,
+            clamp_high=clamp_high,
+            freeze_gripper=freeze_gripper,
+            gripper_index=gripper_index,
+            device=DEVICE,
+            dtype=torch.float32,
+        )
         refined_actions = result.actions
         if use_normalize:
             refined_actions = converter.unnormalize_actions(refined_actions)
@@ -622,52 +503,20 @@ def get_vla_action(
         return refined_actions[selected_index]
 
     # PDB-7: rerank基线路径入口（只有 use_action_refine=False 时才会到这里）
-    #import pdb; pdb.set_trace()  # actions.shape, cfg.augmented_samples, cfg.verifier_forward_eq_budget
+    #import pdb; pdb.set_trace()  # actions.shape, cfg.augmented_samples
 
     # Generate augmented samples based on the mean and variance of a batch of actions.
-    budget_forward_eq = getattr(cfg, "verifier_forward_eq_budget", None)
-    num_samples = cfg.augmented_samples
-    if budget_forward_eq is not None and _budget_applies(cfg, "rerank"):
-        num_samples = max(num_samples, int(budget_forward_eq))
     output_ids, actions = generate_augmented_samples_from_batch(
         batch_actions=actions,
-        num_samples=num_samples
+        num_samples=cfg.augmented_samples,
     )
 
     # Score each action with robomonkey verifier
     output_ids, actions = get_unique_actions(output_ids, actions)
     reward_img = str(Path("./transfer_images/reward_img.jpg").absolute())
-    if budget_forward_eq is not None and _budget_applies(cfg, "rerank"):
-        max_actions = max(1, int(budget_forward_eq))
-        if len(actions) > max_actions:
-            strategy = str(getattr(cfg, "verifier_budget_rerank_strategy", "first")).lower()
-            if strategy == "random":
-                idx = np.random.choice(len(actions), size=max_actions, replace=False)
-                output_ids = output_ids[idx]
-                actions = actions[idx]
-            else:
-                output_ids = output_ids[:max_actions]
-                actions = actions[:max_actions]
-            _log_forward_eq(
-                cfg,
-                "[verifier_budget][rerank] "
-                f"capped_candidates={len(actions)} "
-                f"budget={budget_forward_eq} "
-                f"strategy={strategy}",
-            )
     rewards = get_rewards(instruction, reward_img, output_ids, cfg=cfg)
     # PDB-8: rerank打分结果，检查 rewards 分布和候选动作
     #import pdb; pdb.set_trace()  # rewards, output_ids.shape, actions.shape, np.argmax(rewards)
-
-    forward_eq_used = float(len(output_ids))
-    if _budget_applies(cfg, "rerank"):
-        _log_forward_eq(
-            cfg,
-            "[verifier_budget][rerank] "
-            f"forward_eq_used={len(actions)} "
-            f"num_candidates={len(actions)}",
-        )
-    _track_forward_eq(cfg, forward_eq_used, mode="rerank")
 
     selected_index = np.argmax(rewards)
 
